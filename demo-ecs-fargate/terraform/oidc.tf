@@ -26,10 +26,17 @@ resource "aws_iam_role" "github_actions" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringEquals = {
-          "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:aud"        = "sts.amazonaws.com"
+          "token.actions.githubusercontent.com:repository" = var.github_repo
+          "token.actions.githubusercontent.com:ref"        = "refs/heads/${var.github_branch}"
         }
+        # AWS exige una condicion sobre "sub" (o job_workflow_ref) ademas de las
+        # de arriba. Esta cuenta/repo tiene activado el hardening de GitHub que
+        # agrega IDs inmutables al claim sub (repo:owner@ownerId/repo@repoId:...),
+        # por eso el wildcard en el owner/repo - las condiciones StringEquals de
+        # arriba (repository, ref) son las que realmente acotan el acceso.
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = "repo:${var.github_repo}:ref:refs/heads/${var.github_branch}"
+          "token.actions.githubusercontent.com:sub" = "repo:*/*:ref:refs/heads/${var.github_branch}"
         }
       }
     }]
