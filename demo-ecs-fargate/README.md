@@ -142,7 +142,9 @@ demo-ecs-fargate/
 
 ## 6. Comandos paso a paso
 
-El ARN del role y el secret de GitHub **no se copian a mano** — Terraform los crea y los sube directo al repo vía el provider `integrations/github` (resource `github_actions_secret` en `oidc.tf`, referencia directa a `aws_iam_role.github_actions.arn`, sin `depends_on` porque la referencia ya ordena la creación). Solo hace falta darle a Terraform un token de GitHub para esa una llamada.
+El state de Terraform vive en un bucket S3 (`boxful-demo-tfstate-460852142662`, backend en `main.tf`, locking nativo de S3), compartido entre tu apply local y el que corre en CI — así ninguno de los dos arranca de cero ni intenta recrear lo que ya existe.
+
+El secret `AWS_ROLE_ARN` en GitHub se crea con un comando aparte, **no** como parte de `terraform apply` — el job de CI no tiene un token con permiso para administrar secrets del propio repo (el `${{ secrets.GITHUB_TOKEN }}` automático no alcanza para esa API), así que ese paso es intencionalmente manual y se hace una sola vez.
 
 ### 6.1 Prerrequisitos
 
@@ -156,19 +158,11 @@ gh --version
 # Confirmar identidad/cuenta AWS activa (la misma que usó `aws configure`)
 aws sts get-caller-identity
 
-# Confirmar sesión de gh (necesaria para el token que usará Terraform)
+# Confirmar sesión de gh
 gh auth status
 ```
 
-### 6.2 Exportar el token de GitHub (solo para este apply local)
-
-```bash
-export GITHUB_TOKEN=$(gh auth token)
-```
-
-Este token vive solo en tu shell — no se guarda en el repo, ni en el state, ni en CI. Es lo que le da permiso a Terraform para escribir el secret `AWS_ROLE_ARN` en el repo vía API.
-
-### 6.3 Bootstrap de infraestructura (una sola vez, local)
+### 6.2 Bootstrap de infraestructura (una sola vez, local)
 
 ```bash
 cd demo-ecs-fargate/terraform
@@ -180,19 +174,22 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Esto crea, en un solo apply: VPC, ALB, ECS cluster + servicios (con imagen placeholder `latest`, aún no existe en ECR hasta el primer push del pipeline), ECR repos, IAM roles, OIDC provider + role de GitHub Actions, **y el secret `AWS_ROLE_ARN` en el repo** (automático, sin copiar/pegar nada).
+Esto crea: VPC, ALB, ECS cluster + servicios (con imagen placeholder `latest`, aún no existe en ECR hasta el primer push del pipeline), ECR repos, IAM roles, OIDC provider + role de GitHub Actions.
 
 > Nota: en el primer `apply`, los servicios ECS quedarán con tasks fallando (no hay imagen `latest` en ECR todavía). Eso se resuelve solo, en el primer run del workflow de GitHub Actions que sí construye y sube las imágenes.
 
-### 6.4 Confirmar que el secret quedó creado (opcional)
+### 6.3 Crear el secret AWS_ROLE_ARN (una sola vez, local)
 
 ```bash
+gh secret set AWS_ROLE_ARN --repo Jocasmen94/Practical-Course --body "$(terraform output -raw github_actions_role_arn)"
+
+# Confirmar
 gh secret list --repo Jocasmen94/Practical-Course
 ```
 
-No se necesita crear ningún otro secret (ni access keys AWS).
+No se necesita crear ningún otro secret (ni access keys AWS). Si el role se destruye y se recrea, el ARN cambia — hay que repetir este paso una vez.
 
-### 6.5 Push del código al repo
+### 6.4 Push del código al repo
 
 ```bash
 cd /Users/itboxful/Documents/Practical-Course
@@ -208,7 +205,7 @@ Ese push dispara `.github/workflows/deploy.yml`, que:
 4. `aws ecs update-service --force-new-deployment` por cada servicio.
 5. `aws ecs wait services-stable` — el job no termina "success" hasta que las tasks nuevas estén healthy.
 
-### 6.6 Verificar el deploy
+### 6.5 Verificar el deploy
 
 ```bash
 # Ver estado del pipeline
@@ -224,7 +221,7 @@ curl -s "$(terraform output -raw frontend_url)/health"
 curl -s "$(terraform output -raw backend_url)/hello"
 ```
 
-### 6.7 Debug rápido si algo falla
+### 6.6 Debug rápido si algo falla
 
 ```bash
 # Servicios y tasks
@@ -235,7 +232,7 @@ aws ecs describe-services --cluster boxful-demo --services boxful-demo-frontend 
 aws logs tail /ecs/boxful-demo-backend --since 10m | grep -E "ERROR|FATAL|panic|exception"
 ```
 
-### 6.8 Cleanup (destruir todo)
+### 6.7 Cleanup (destruir todo)
 
 ```bash
 cd demo-ecs-fargate/terraform

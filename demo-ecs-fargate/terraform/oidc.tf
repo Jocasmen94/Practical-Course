@@ -7,10 +7,14 @@ resource "aws_iam_openid_connect_provider" "github" {
     "sts.amazonaws.com"
   ]
 
-  # Thumbprint gestionado por AWS desde 2023 (root CA de GitHub), se deja vacio
-  # para que AWS lo resuelva automaticamente; si el provider se rechaza, usar:
-  # thumbprint_list = ["6938fd4d98bab03faadb97b34396831e3780aea1"]
+  # AWS valida el issuer de GitHub via IAMTrustStore desde 2023 y no usa este
+  # campo, pero la API lo sigue devolviendo con un valor propio - se ignora
+  # para no generar diff en cada plan.
   thumbprint_list = []
+
+  lifecycle {
+    ignore_changes = [thumbprint_list]
+  }
 }
 
 resource "aws_iam_role" "github_actions" {
@@ -131,11 +135,10 @@ resource "aws_iam_role_policy_attachment" "github_actions_iam" {
   policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
 }
 
-# Crea el secret AWS_ROLE_ARN en el repo automaticamente. La referencia a
-# aws_iam_role.github_actions.arn ya genera la dependencia (crea el role
-# antes de escribir el secret) - no hace falta depends_on explicito.
-resource "github_actions_secret" "aws_role_arn" {
-  repository      = split("/", var.github_repo)[1]
-  secret_name     = "AWS_ROLE_ARN"
-  plaintext_value = aws_iam_role.github_actions.arn
-}
+# El secret AWS_ROLE_ARN se crea una sola vez con un apply LOCAL (requiere
+# GITHUB_TOKEN via `export GITHUB_TOKEN=$(gh auth token)`), usando el resource
+# github_actions_secret del provider "github" (ver README seccion 6.2-6.3).
+# No se gestiona desde aqui porque CI (GitHub Actions) no tiene un token con
+# permiso para administrar secrets del propio repo - el token automatico
+# ${{ secrets.GITHUB_TOKEN }} no alcanza para esa API. Si el role cambia de
+# ARN, hay que volver a correr ese apply local una vez.
