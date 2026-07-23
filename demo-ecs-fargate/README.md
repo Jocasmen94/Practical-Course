@@ -96,7 +96,20 @@ Flujo de una request de usuario:
 
 ---
 
-## 3. Estructura del repo
+## 3. Internet Gateway vs NAT Gateway (por qué se usan los dos)
+
+Resuelven cosas distintas, no son intercambiables:
+
+- **Internet Gateway (IGW)**: da ruta bidireccional a subnets con IP pública. Solo lo usan las subnets **públicas** — ahí vive el ALB, que necesita ser alcanzable desde internet.
+- **NAT Gateway**: da salida a internet a subnets **privadas** (sin IP pública), pero nadie de afuera puede entrar por ahí. Las tasks ECS viven en subnets privadas y necesitan salir a internet para pull de imágenes de ECR, llamadas a APIs externas, etc. Sin NAT, la task no tiene ruta de salida y falla al iniciar.
+
+Por qué las tasks no están directo en la subnet pública con el IGW: seguridad — así no tienen IP pública ni son alcanzables directo desde internet, solo vía el ALB. Es el patrón estándar de AWS (defense in depth).
+
+Alternativa para bajar costo en esta demo (el NAT Gateway es el recurso más caro, ~$32/mes): mover las tasks a subnets públicas con `assign_public_ip = true` y quitar el NAT. Menos seguro (el Security Group sigue protegiendo, pero la task queda con IP pública), aceptable para una demo corta, no recomendado para producción.
+
+---
+
+## 4. Estructura del repo
 
 ```
 demo-ecs-fargate/
@@ -118,7 +131,7 @@ demo-ecs-fargate/
 
 ---
 
-## 4. Por qué OIDC en vez de AWS_ACCESS_KEY_ID / SECRET
+## 5. Por qué OIDC en vez de AWS_ACCESS_KEY_ID / SECRET
 
 - Credenciales de corta duración (STS), no secrets estáticos guardados en GitHub.
 - El trust policy del IAM role (`oidc.tf`) solo permite `sts:AssumeRoleWithWebIdentity` desde el repo y branch exactos: `repo:Jocasmen94/Practical-Course:ref:refs/heads/main`. Si alguien copia el workflow a otro repo, no puede asumir el role.
@@ -127,7 +140,7 @@ demo-ecs-fargate/
 
 ---
 
-## 5. Comandos paso a paso
+## 6. Comandos paso a paso
 
 ### 5.1 Prerrequisitos
 
@@ -242,7 +255,7 @@ Esto borra ALB, ECS, VPC/NAT, ECR (con las imágenes dentro), IAM roles y el OID
 
 ---
 
-## 6. Nota de permisos (demo vs producción)
+## 7. Nota de permisos (demo vs producción)
 
 Para que el job de `terraform apply` en CI pueda crear VPC/ALB/IAM/ECS/ECR, el role de GitHub Actions (`oidc.tf`) tiene adjuntas `PowerUserAccess` + `IAMFullAccess`. Es intencional para simplificar la demo.
 
@@ -250,7 +263,7 @@ En un entorno real: separar en dos roles — uno para `terraform plan/apply` con
 
 ---
 
-## 7. Costos estimados (us-east-1, desired_count=1 por servicio)
+## 8. Costos estimados (us-east-1, desired_count=1 por servicio)
 
 | Recurso | Costo aprox/mes |
 |---|---|
@@ -263,7 +276,7 @@ Para bajar costo en la demo: eliminar el NAT Gateway y correr las tasks en subne
 
 ---
 
-## 8. Puntos clave para explicar en entrevista
+## 9. Puntos clave para explicar en entrevista
 
 - **Seguridad**: tasks en subnets privadas, ALB en públicas; security groups restrictivos (solo ALB → tasks); IAM least-privilege en los roles de las tasks; ECR con scanning; OIDC en vez de credenciales estáticas.
 - **Escalabilidad**: Fargate serverless, sin gestión de servidores; multi-AZ; path-based routing en un solo ALB para dos servicios.
