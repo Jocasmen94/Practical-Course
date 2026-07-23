@@ -1,0 +1,120 @@
+name: Terraform + Deploy ECS Fargate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'demo-ecs-fargate/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'demo-ecs-fargate/**'
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  TF_DIR: demo-ecs-fargate/terraform
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    outputs:
+      ecr_backend: ${{ steps.tf-output.outputs.ecr_backend }}
+      ecr_frontend: ${{ steps.tf-output.outputs.ecr_frontend }}
+      cluster: ${{ steps.tf-output.outputs.cluster }}
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6.0"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check
+
+      - name: Terraform Init
+        run: terraform init
+
+      - name: Terraform Validate
+        run: terraform validate
+
+      - name: Terraform Plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color
+
+      - name: Terraform Apply
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: terraform apply -auto-approve
+
+      - name: Extract outputs
+        id: tf-output
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        run: |
+          echo "ecr_backend=$(terraform output -raw ecr_backend_url)" >> "$GITHUB_OUTPUT"
+          echo "ecr_frontend=$(terraform output -raw ecr_frontend_url)" >> "$GITHUB_OUTPUT"
+          echo "cluster=$(terraform output -raw ecs_cluster_name)" >> "$GITHUB_OUTPUT"
+
+  build-and-deploy:
+    name: Build & Deploy
+    needs: terraform
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [frontend, backend]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        working-directory: demo-ecs-fargate/${{ matrix.service }}
+        run: |
+          REPO_NAME="boxful-demo/${{ matrix.service }}"
+          docker build -t "$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG" -t "$ECR_REGISTRY/$REPO_NAME:latest" .
+          docker push "$ECR_REGISTRY/$REPO_NAME:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$REPO_NAME:latest"
+
+      - name: Force new deployment
+        run: |
+          aws ecs update-service \
+            --cluster "${{ needs.terraform.outputs.cluster }}" \
+            --service "boxful-demo-${{ matrix.service }}" \
+            --force-new-deployment
+
+      - name: Wait for service stability
+        run: |
+          aws ecs wait services-stable \
+            --cluster "${{ needs.terraform.outputs.cluster }}" \
+            --services "boxful-demo-${{ matrix.service }}"
