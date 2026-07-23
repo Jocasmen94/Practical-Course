@@ -21,12 +21,12 @@ resource "aws_ecs_cluster_capacity_providers" "main" {
 
 resource "aws_cloudwatch_log_group" "frontend" {
   name              = "/ecs/${var.project_name}-frontend"
-  retention_in_days = 7
+  retention_in_days = 14
 }
 
 resource "aws_cloudwatch_log_group" "backend" {
   name              = "/ecs/${var.project_name}-backend"
-  retention_in_days = 7
+  retention_in_days = 14
 }
 
 resource "aws_security_group" "ecs_tasks" {

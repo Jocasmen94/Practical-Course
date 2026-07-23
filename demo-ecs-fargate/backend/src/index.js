@@ -13,9 +13,9 @@ app.get('/health', (req, res) => {
 
 app.get('/api/hello', (req, res) => {
   res.json({
-    message: 'Hola desde el Backend!',
+    message: 'Hola desde el Backend! Deploy automatico via OIDC + GitHub Actions',
     hostname: require('os').hostname(),
-    version: process.env.APP_VERSION || 'v1.0.0',
+    version: process.env.APP_VERSION || 'v2.0.0',
     environment: process.env.NODE_ENV || 'development',
     timestamp: new Date().toISOString()
   });
