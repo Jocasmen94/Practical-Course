@@ -6,6 +6,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    github = {
+      source  = "integrations/github"
+      version = "~> 6.0"
+    }
   }
 
   # State local por defecto para la demo. Para uso real, mover a backend S3:
@@ -26,6 +30,12 @@ provider "aws" {
       ManagedBy   = "terraform"
     }
   }
+}
+
+# Token leído automáticamente de la env var GITHUB_TOKEN (ej: export GITHUB_TOKEN=$(gh auth token)).
+# Solo se usa localmente para crear el secret AWS_ROLE_ARN vía API de GitHub - nunca se guarda en el repo ni en CI.
+provider "github" {
+  owner = split("/", var.github_repo)[0]
 }
 
 data "aws_availability_zones" "available" {

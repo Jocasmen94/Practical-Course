@@ -142,20 +142,33 @@ demo-ecs-fargate/
 
 ## 6. Comandos paso a paso
 
-### 5.1 Prerrequisitos
+El ARN del role y el secret de GitHub **no se copian a mano** — Terraform los crea y los sube directo al repo vía el provider `integrations/github` (resource `github_actions_secret` en `oidc.tf`, referencia directa a `aws_iam_role.github_actions.arn`, sin `depends_on` porque la referencia ya ordena la creación). Solo hace falta darle a Terraform un token de GitHub para esa una llamada.
+
+### 6.1 Prerrequisitos
 
 ```bash
 # Verificar CLI instaladas
 aws --version
 terraform -version
 docker --version
-gh --version   # opcional, para crear el secret desde terminal
+gh --version
 
 # Confirmar identidad/cuenta AWS activa (la misma que usó `aws configure`)
 aws sts get-caller-identity
+
+# Confirmar sesión de gh (necesaria para el token que usará Terraform)
+gh auth status
 ```
 
-### 5.2 Bootstrap de infraestructura (una sola vez, local)
+### 6.2 Exportar el token de GitHub (solo para este apply local)
+
+```bash
+export GITHUB_TOKEN=$(gh auth token)
+```
+
+Este token vive solo en tu shell — no se guarda en el repo, ni en el state, ni en CI. Es lo que le da permiso a Terraform para escribir el secret `AWS_ROLE_ARN` en el repo vía API.
+
+### 6.3 Bootstrap de infraestructura (una sola vez, local)
 
 ```bash
 cd demo-ecs-fargate/terraform
@@ -167,57 +180,35 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Esto crea: VPC, ALB, ECS cluster + servicios (con imagen placeholder `latest`, aún no existe en ECR hasta el primer push del pipeline), ECR repos, IAM roles, OIDC provider + role de GitHub Actions.
+Esto crea, en un solo apply: VPC, ALB, ECS cluster + servicios (con imagen placeholder `latest`, aún no existe en ECR hasta el primer push del pipeline), ECR repos, IAM roles, OIDC provider + role de GitHub Actions, **y el secret `AWS_ROLE_ARN` en el repo** (automático, sin copiar/pegar nada).
 
 > Nota: en el primer `apply`, los servicios ECS quedarán con tasks fallando (no hay imagen `latest` en ECR todavía). Eso se resuelve solo, en el primer run del workflow de GitHub Actions que sí construye y sube las imágenes.
 
-### 5.3 Copiar el ARN del role de GitHub Actions
+### 6.4 Confirmar que el secret quedó creado (opcional)
 
 ```bash
-terraform output -raw github_actions_role_arn
+gh secret list --repo Jocasmen94/Practical-Course
 ```
 
-Copia el valor, algo como:
-```
-arn:aws:iam::123456789012:role/boxful-demo-github-actions-deploy
-```
+No se necesita crear ningún otro secret (ni access keys AWS).
 
-### 5.4 Crear el secret en GitHub
-
-Opción A — desde la web: **Settings → Secrets and variables → Actions → New repository secret**
-```
-Name:  AWS_ROLE_ARN
-Value: <arn copiado en 5.3>
-```
-
-Opción B — con `gh` CLI:
-```bash
-gh secret set AWS_ROLE_ARN --repo Jocasmen94/Practical-Course --body "arn:aws:iam::123456789012:role/boxful-demo-github-actions-deploy"
-```
-
-No se necesita ningún otro secret (ni access keys).
-
-### 5.5 Push del código al repo
+### 6.5 Push del código al repo
 
 ```bash
-# Desde la raíz de Practical-Course (aún no es repo git)
 cd /Users/itboxful/Documents/Practical-Course
-git init
-git remote add origin https://github.com/Jocasmen94/Practical-Course.git
 git add demo-ecs-fargate
 git commit -m "Add ECS Fargate demo (frontend+backend, terraform, OIDC CI/CD)"
-git branch -M main
-git push -u origin main
+git push origin main
 ```
 
 Ese push dispara `.github/workflows/deploy.yml`, que:
-1. Asume el role via OIDC.
+1. Asume el role via OIDC (usando el ARN que ya está en el secret `AWS_ROLE_ARN`).
 2. Corre `terraform plan` (en PR) o `terraform apply` (en push a `main`).
 3. Build + push de las imágenes `frontend` y `backend` a ECR (tags `latest` y `$GITHUB_SHA`).
 4. `aws ecs update-service --force-new-deployment` por cada servicio.
 5. `aws ecs wait services-stable` — el job no termina "success" hasta que las tasks nuevas estén healthy.
 
-### 5.6 Verificar el deploy
+### 6.6 Verificar el deploy
 
 ```bash
 # Ver estado del pipeline
@@ -233,7 +224,7 @@ curl -s "$(terraform output -raw frontend_url)/health"
 curl -s "$(terraform output -raw backend_url)/hello"
 ```
 
-### 5.7 Debug rápido si algo falla
+### 6.7 Debug rápido si algo falla
 
 ```bash
 # Servicios y tasks
@@ -244,14 +235,14 @@ aws ecs describe-services --cluster boxful-demo --services boxful-demo-frontend 
 aws logs tail /ecs/boxful-demo-backend --since 10m | grep -E "ERROR|FATAL|panic|exception"
 ```
 
-### 5.8 Cleanup (destruir todo)
+### 6.8 Cleanup (destruir todo)
 
 ```bash
 cd demo-ecs-fargate/terraform
 terraform destroy
 ```
 
-Esto borra ALB, ECS, VPC/NAT, ECR (con las imágenes dentro), IAM roles y el OIDC provider. Confirmar antes de correrlo — es irreversible.
+Esto borra ALB, ECS, VPC/NAT, ECR (con las imágenes dentro), IAM roles, el OIDC provider y el secret `AWS_ROLE_ARN`. Confirmar antes de correrlo — es irreversible.
 
 ---
 

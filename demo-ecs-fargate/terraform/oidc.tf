@@ -123,3 +123,12 @@ resource "aws_iam_role_policy_attachment" "github_actions_iam" {
   role       = aws_iam_role.github_actions.name
   policy_arn = "arn:aws:iam::aws:policy/IAMFullAccess"
 }
+
+# Crea el secret AWS_ROLE_ARN en el repo automaticamente. La referencia a
+# aws_iam_role.github_actions.arn ya genera la dependencia (crea el role
+# antes de escribir el secret) - no hace falta depends_on explicito.
+resource "github_actions_secret" "aws_role_arn" {
+  repository      = split("/", var.github_repo)[1]
+  secret_name     = "AWS_ROLE_ARN"
+  plaintext_value = aws_iam_role.github_actions.arn
+}
